@@ -3,51 +3,41 @@ const cors = require('cors');
 const ytdl = require('@distube/ytdl-core');
 const app = express();
 
-// Wyłącza irytujący komunikat o aktualizacji w logach Rendera
+// Blokada zbędnych komunikatów w logach
 process.env.YTDL_NO_UPDATE = 'true';
 
 app.use(cors());
 
 app.get('/download', async (req, res) => {
+    const videoUrl = req.query.url;
+
+    if (!videoUrl || !ytdl.validateURL(videoUrl)) {
+        return res.status(400).send("Nieprawidłowy link YouTube");
+    }
+
     try {
-        const videoUrl = req.query.url;
-        if (!videoUrl) {
-            return res.status(400).send("Brak URL");
-        }
+        // Ustawiamy nagłówki, aby przeglądarka wiedziała, że to plik audio
+        res.setHeader('Content-Disposition', 'attachment; filename="audio.mp3"');
+        res.setHeader('Content-Type', 'audio/mpeg');
 
-        // Sprawdź czy URL jest poprawny zanim zaczniesz pobierać
-        if (!ytdl.validateURL(videoUrl)) {
-            return res.status(400).send("Nieprawidłowy link do YouTube");
-        }
-
-        res.header('Content-Disposition', 'attachment; filename="audio.mp3"');
-        res.header('Content-Type', 'audio/mpeg');
-
+        // Pobieranie audio z optymalizacją bufora (highWaterMark) dla darmowych serwerów
         const stream = ytdl(videoUrl, { 
             quality: 'highestaudio',
             filter: 'audioonly',
-            requestOptions: {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                }
-            }
+            highWaterMark: 1 << 25 // 32MB bufora, aby uniknąć błędów 502/Memory Limit
         });
 
-        // KLUCZOWE: Obsługa błędów wewnątrz strumienia
         stream.on('error', (err) => {
-            console.error("Błąd strumienia:", err);
-            if (!res.headersSent) {
-                res.status(500).send("Błąd podczas przesyłania audio");
-            }
+            console.error("Błąd strumienia:", err.message);
+            if (!res.headersSent) res.status(500).send("Błąd transmisji");
         });
 
+        // Wysyłanie danych prosto do użytkownika
         stream.pipe(res);
-        
+
     } catch (err) {
-        console.error("Główny błąd serwera:", err);
-        if (!res.headersSent) {
-            res.status(500).send("Błąd pobierania");
-        }
+        console.error("Błąd krytyczny:", err.message);
+        if (!res.headersSent) res.status(500).send("Błąd serwera");
     }
 });
 
