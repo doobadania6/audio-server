@@ -1,13 +1,22 @@
 from flask import Flask, request, Response
 from flask_cors import CORS
 import requests
+import random
 
 app = Flask(__name__)
 CORS(app)
 
+# Lista działających instancji Cobalt (v10+)
+COBALT_INSTANCES = [
+    "https://api.cobalt.tools/",
+    "https://cobalt.hyra.com/",
+    "https://api.v0.pw/",
+    "https://cobalt.shitty.moe/"
+]
+
 @app.route('/')
 def home():
-    return "Serwer AudioStitcher v5 (Cobalt v10) działa!", 200
+    return "Serwer AudioStitcher v6 (Multi-Cobalt) działa!", 200
 
 @app.route('/download')
 def download():
@@ -15,9 +24,6 @@ def download():
     if not video_url:
         return "Brak URL", 400
 
-    # API COBALT (v10)
-    cobalt_api_url = "https://api.cobalt.tools/"
-    
     payload = {
         "url": video_url,
         "videoQuality": "720",
@@ -31,33 +37,41 @@ def download():
         "Content-Type": "application/json"
     }
 
-    try:
-        response = requests.post(cobalt_api_url, json=payload, headers=headers)
-        data = response.json()
+    # Losujemy kolejność sprawdzania serwerów
+    instances = list(COBALT_INSTANCES)
+    random.shuffle(instances)
 
-        if response.status_code == 200 and 'url' in data:
-            file_url = data.get('url')
+    for api_url in instances:
+        try:
+            print(f"Próba pobrania przez: {api_url}")
+            response = requests.post(api_url, json=payload, headers=headers, timeout=10)
             
-            def generate():
-                r = requests.get(file_url, stream=True, timeout=60)
-                for chunk in r.iter_content(chunk_size=256 * 1024):
-                    if chunk:
-                        yield chunk
+            if response.status_code == 200:
+                data = response.json()
+                file_url = data.get('url')
+                
+                if not file_url:
+                    continue
 
-            return Response(
-                generate(), 
-                mimetype="audio/mpeg", 
-                headers={
-                    "Content-Disposition": "attachment; filename=audio.mp3",
-                    "Access-Control-Allow-Origin": "*"
-                }
-            )
-        else:
-            error_msg = data.get('text', 'Błąd komunikacji z API Cobalt')
-            return f"Błąd Cobalt: {error_msg}", 500
+                def generate():
+                    r = requests.get(file_url, stream=True, timeout=60)
+                    for chunk in r.iter_content(chunk_size=256 * 1024):
+                        if chunk:
+                            yield chunk
 
-    except Exception as e:
-        return f"Serwer Error: {str(e)}", 500
+                return Response(
+                    generate(), 
+                    mimetype="audio/mpeg", 
+                    headers={
+                        "Content-Disposition": "attachment; filename=audio.mp3",
+                        "Access-Control-Allow-Origin": "*"
+                    }
+                )
+        except Exception as e:
+            print(f"Serwer {api_url} nie odpowiedział: {str(e)}")
+            continue
+
+    return "Błąd: Wszystkie serwery Cobalt są obecnie zajęte. Spróbuj ponownie za chwilę.", 503
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
