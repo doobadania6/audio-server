@@ -3,12 +3,11 @@ from flask_cors import CORS
 import requests
 
 app = Flask(__name__)
-# CORS pozwala Twojej stronie na GitHub Pages łączyć się z tym serwerem
 CORS(app)
 
 @app.route('/')
 def home():
-    return "Serwer AudioStitcher v4 (Cobalt Engine) działa!", 200
+    return "Serwer AudioStitcher v5 (Cobalt v10) działa!", 200
 
 @app.route('/download')
 def download():
@@ -16,15 +15,16 @@ def download():
     if not video_url:
         return "Brak URL", 400
 
-    # Konfiguracja zapytania do Cobalt API (najbardziej stabilny silnik)
-    cobalt_api_url = "https://api.cobalt.tools/api/json"
+    # NOWY ADRES API COBALT (v10)
+    cobalt_api_url = "https://api.cobalt.tools/"
+    
+    # Zaktualizowana struktura parametrów dla v10
     payload = {
         "url": video_url,
-        "isAudioOnly": True,
+        "videoQuality": "720", # wymagane przez API, nawet przy audio
         "audioFormat": "mp3",
-        "vCodec": "h264",
-        "aCodec": "mp3",
-        "isNoTTWatermark": True
+        "filenameStyle": "pretty",
+        "downloadMode": "audio" # kluczowa zmiana w v10
     }
     
     headers = {
@@ -33,18 +33,22 @@ def download():
     }
 
     try:
-        # 1. Wysyłamy prośbę o wygenerowanie linku do pliku audio
+        # 1. Wysyłamy prośbę do Cobalt
         response = requests.post(cobalt_api_url, json=payload, headers=headers)
+        
+        # Logowanie dla debugowania w panelu Render
+        print(f"Cobalt Response Status: {response.status_code}")
         data = response.json()
 
-        # Status 'stream' lub 'picker' oznacza sukces w Cobalt API
-        if data.get('status') in ['stream', 'picker', 'redirect']:
+        # W v10 sukces zwraca status 'tunnel', 'redirect' lub 'picker'
+        if response.status_code == 200 and 'url' in data:
             file_url = data.get('url')
             
-            # 2. Pobieramy plik z serwera Cobalt i przesyłamy go strumieniowo do Twojej strony
+            # 2. Przesyłamy strumień do użytkownika
             def generate():
+                # Niektóre URL z Cobalt są bezpośrednie, inne wymagają tunelowania
                 r = requests.get(file_url, stream=True, timeout=60)
-                for chunk in r.iter_content(chunk_size=256 * 1024): # Kawałki po 256KB
+                for chunk in r.iter_content(chunk_size=256 * 1024):
                     if chunk:
                         yield chunk
 
@@ -57,13 +61,14 @@ def download():
                 }
             )
         else:
-            error_msg = data.get('text', 'Nieznany błąd Cobalt')
-            print(f"Błąd Cobalt: {error_msg}")
+            error_msg = data.get('text', 'Błąd komunikacji z API Cobalt')
+            print(f"Szczegóły błędu: {data}")
             return f"Błąd Cobalt: {error_msg}", 500
 
     except Exception as e:
-        print(f"Błąd serwera: {str(e)}")
+        print(f"Błąd krytyczny: {str(e)}")
         return f"Serwer Error: {str(e)}", 500
 
 if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
