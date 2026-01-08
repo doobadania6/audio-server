@@ -1,54 +1,68 @@
-from flask import Flask, request, Response
+from flask import Flask, request, Response, redirect
 from flask_cors import CORS
-import yt_dlp
 import requests
+import random
 
 app = Flask(__name__)
-# Pozwala na zapytania z Twojej strony na GitHub Pages
 CORS(app)
+
+# Lista publicznych instancji Invidious, które zazwyczaj działają dobrze
+INSTANCES = [
+    'https://invidious.snopyta.org',
+    'https://yewtu.be',
+    'https://vid.puffyan.us',
+    'https://invidious.kavin.rocks',
+    'https://inv.vern.cc'
+]
 
 @app.route('/')
 def home():
-    return "Serwer AudioStitcher działa! Użyj ścieżki /download?url=LINK", 200
+    return "Serwer AudioStitcher v3 (Invidious Proxy) działa!", 200
 
 @app.route('/download')
 def download():
-    url = request.args.get('url')
-    if not url:
+    video_url = request.args.get('url')
+    if not video_url:
         return "Brak URL", 400
 
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-        # Udajemy przeglądarkę, by uniknąć blokad "bot"
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
+    # Wyciągamy ID filmu z linku
+    video_id = ""
+    if "v=" in video_url:
+        video_id = video_url.split("v=")[1].split("&")[0]
+    elif "be/" in video_url:
+        video_id = video_url.split("be/")[1].split("?")[0]
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            audio_url = info['url']
+    if not video_id:
+        return "Nieprawidłowy ID filmu", 400
+
+    # Próbujemy pobrać link audio z różnych instancji Invidious
+    random.shuffle(INSTANCES)
+    for instance in INSTANCES:
+        try:
+            api_url = f"{instance}/api/v1/videos/{video_id}"
+            data = requests.get(api_url, timeout=5).json()
             
-            # Pobieramy dane z YouTube i przekazujemy je do przeglądarki
-            def generate():
-                r = requests.get(audio_url, stream=True, timeout=30)
-                for chunk in r.iter_content(chunk_size=128 * 1024): # 128KB kawałki
-                    if chunk:
+            # Szukamy strumienia audio
+            audio_streams = [f for f in data.get('adaptiveFormats', []) if 'audio/' in f.get('type', '')]
+            if audio_streams:
+                # Wybieramy najlepszą jakość audio
+                best_audio = sorted(audio_streams, key=lambda x: int(x.get('bitrate', 0)), reverse=True)[0]
+                final_url = best_audio['url']
+                
+                # Przesyłamy strumień do użytkownika
+                def generate():
+                    r = requests.get(final_url, stream=True, timeout=30)
+                    for chunk in r.iter_content(chunk_size=256 * 1024):
                         yield chunk
+                
+                return Response(generate(), mimetype="audio/mpeg", headers={
+                    "Content-Disposition": "attachment; filename=audio.mp3",
+                    "Access-Control-Allow-Origin": "*"
+                })
+        except:
+            continue # Jeśli jedna instancja zawiedzie, próbuje następnej
 
-            return Response(
-                generate(),
-                mimetype="audio/mpeg",
-                headers={
-                    "Content-Disposition": f"attachment; filename=audio.mp3",
-                    "Access-Control-Allow-Origin": "*" # Dodatkowe zabezpieczenie CORS
-                }
-            )
-    except Exception as e:
-        print(f"Błąd: {str(e)}")
-        return f"Błąd serwera: {str(e)}", 500
+    return "Wszystkie instancje Invidious są obecnie przeciążone. Spróbuj za minutę.", 503
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
